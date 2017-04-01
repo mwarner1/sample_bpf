@@ -9,12 +9,11 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <net/if.h>
-#ifdef __SOLARIS__
-#include <sys/ethernet.h>
-#else
+#ifndef __SOLARIS__
 #include <net/ethernet.h>
 #endif
 #include <net/bpf.h>
+#include <errno.h>
 #include <strings.h>
 
 #define FATAL printf
@@ -25,8 +24,15 @@
 #define ETHER_CRC_LEN 4
 #define ETHER_ADDR_LEN 6
 #define ETHER_TYPE_LEN 2
-// My struct for an ethernet frame. There are many like it, but this one is
-// mine.
+
+#ifdef __SOLARIS__
+struct ether_header {
+	u_char ether_dhost[ETHER_ADDR_LEN];
+	u_char ether_shost[ETHER_ADDR_LEN];
+	u_short ether_type;
+};
+#endif
+
 struct frame_t {
 	struct ether_header header;
 	unsigned char payload[ETHER_MAX_LEN - ETHER_HDR_LEN];
@@ -41,6 +47,8 @@ int associate_bpf(char * ifname);
 int bpf_prepare(int bpf);
 void write_frames(int bpf, const unsigned char *databuf, size_t datalen);
 void write_frames2(int bpf, const unsigned char *databuf, size_t datalen);
+void make_nonblocking(int fd);
+void make_blocking(int fd);
 
 int main(int argc, char *argv[]) {
 	const unsigned char data[] = { 0x00, 0x3e, 0xe1, 0xc0, 0x9b, 0x92, 0x34,
@@ -190,38 +198,48 @@ int main(int argc, char *argv[]) {
 	int outside_bpf = associate_bpf(argv[1]);
 	int outside_buffer_len = bpf_prepare(outside_bpf);
 
-	struct bpf_hdr *outside_bpf_buffer = (struct bpf_hdr *) calloc(
-			outside_buffer_len, sizeof(struct bpf_hdr *));
-	struct bpf_hdr* outside_bpf_packet;
+	make_nonblocking(outside_bpf);
 
-	write_frames(outside_bpf, data, 1514);
+	write_frames2(outside_bpf, data, 1514);
 	close(outside_bpf);
 	return 0;
 
 }
 
+void make_blocking(int fd) {
+	int opts = fcntl(fd, F_GETFL);
+	opts = opts & (~O_NONBLOCK);
+	if (fcntl(fd, F_SETFL, opts) != 0) {
+		printf("Error setting blocking mode");
+	}
+}
+
+void make_nonblocking(int fd) {
+	if (fcntl(fd, F_SETFL, O_NONBLOCK) != 0) {
+		printf("Error setting nonblocking mode");
+	}
+}
+
 void write_frames2(int bpf, const unsigned char *databuf, size_t datalen) {
+	for (int x = 0; x < datalen; x++) {
+		printf("%02x ", databuf[x]);
+	}
+	printf("\n");
 	int bytes_sent = write(bpf, databuf, datalen);
-	printf("Bytes sent %d\n",bytes_sent);
-	if (bytes_sent<0) {
+	printf("Bytes sent %d\n", bytes_sent);
+	if (bytes_sent < 0) {
 		perror("problem");
 	}
 }
 
 void write_frames(int bpf, const unsigned char *databuf, size_t datalen) {
+
 	size_t start = 14;
 	struct frame_t *frame = malloc(ETHER_MAX_LEN);
 	size_t bytes_to_send;
 	ssize_t bytes_sent;
-#ifdef __SOLARIS__
-	// Solaris' sys/ethernet.h has a struct embedded within a struct
-	// so any references to the header are a layer deeper than other OSes
-	memcpy(frame->header.ether_dhost.ether_addr_octet, databuf, ETHER_ADDR_LEN);
-	memcpy(frame->header.ether_shost.ether_addr_octet, databuf+ETHER_ADDR_LEN, ETHER_ADDR_LEN);
-#else
 	memcpy(frame->header.ether_dhost, databuf, ETHER_ADDR_LEN);
 	memcpy(frame->header.ether_shost, databuf+ETHER_ADDR_LEN, ETHER_ADDR_LEN);
-#endif
 
 	char *ether_type = malloc(2 * sizeof(unsigned char));
 	memset(ether_type, 0, 2 * sizeof(unsigned char));
@@ -253,8 +271,8 @@ void write_frames(int bpf, const unsigned char *databuf, size_t datalen) {
 		// Check results
 		if (bytes_sent < 0) {
 			perror("Error, perhaps device doesn't have IP address assigned?");
-			continue;
-//			exit(1);
+//			continue;
+			exit(1);
 		} else if (bytes_sent != frame->len) {
 			printf("Error, only sent %ld bytes of %lu\n", bytes_sent,
 					bytes_to_send);
