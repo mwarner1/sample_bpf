@@ -309,7 +309,7 @@ int associate_bpf(char * ifname) {
 
 	printf("Opened BPF device \"%s\" as fd %u\n", bpfname, bpf);
 
-	/* binding with real interface (wm1) */
+	/* binding with real interface (ifname) */
 	struct ifreq iface;
 	strncpy(iface.ifr_name, ifname, sizeof(iface.ifr_name));
 	if (ioctl(bpf, BIOCSETIF, &iface) < 0) {
