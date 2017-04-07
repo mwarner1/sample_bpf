@@ -15,6 +15,7 @@
 #include <net/bpf.h>
 #include <errno.h>
 #include <strings.h>
+#include <sys/signal.h>
 
 #define FATAL printf
 #define ETHER_MAX_LEN 1518
@@ -257,16 +258,16 @@ void write_frames(int bpf, const unsigned char *databuf, size_t datalen) {
 			bytes_to_send = ETHER_PAYLOAD_LEN;
 		}
 		// Fill frame payload
-		printf("Copying payload from %lu, length %lu\n", start, bytes_to_send);
+		printf("Copying payload from %zu, length %zu\n", start, bytes_to_send);
 		memcpy(frame->payload, (void* )(databuf + start), bytes_to_send);
 		frame->len = ETHER_HDR_LEN + bytes_to_send;
 		// Note we don't add the four-byte CRC, the OS does this for us.
 		// Neither do we fill packets with zeroes when the frame length is
 		// below the minimum Ethernet frame length, the OS will do the
 		// padding.
-		printf("Total frame length: %lu of maximum ethernet frame length %d\n",
+		printf("Total frame length: %u of maximum ethernet frame length %d\n",
 				frame->len, ETHER_MAX_LEN - ETHER_CRC_LEN);
-		printf("frame length %zd datalength %zu\n", frame->len, datalen);
+		printf("frame length %zd datalength %u\n", frame->len, datalen);
 		bytes_sent = write(bpf, frame, frame->len);
 		// Check results
 		if (bytes_sent < 0) {
@@ -274,7 +275,7 @@ void write_frames(int bpf, const unsigned char *databuf, size_t datalen) {
 //			continue;
 			exit(1);
 		} else if (bytes_sent != frame->len) {
-			printf("Error, only sent %ld bytes of %lu\n", bytes_sent,
+			printf("Error, only sent %zd bytes of %u\n", bytes_sent,
 					bytes_to_send);
 		} else {
 			printf("Sending frame OK on fd %d\n", bpf);
@@ -292,13 +293,12 @@ int associate_bpf(char * ifname) {
 
 	/* opening autocloning BFP device */
 	bpf = open(bpfname, O_RDWR);
-	int i = 0;
+
 	if (bpf < 0) {
 		/* no autocloning BPF found: fall back to iteration */
-		for (i = 0; i < 128; i++) {
+		for (int i = 0; i < 128; i++) {
 			snprintf(bpfname, sizeof(bpfname), "/dev/bpf%d", i);
 			bpf = open(bpfname, O_RDWR);
-
 			if (bpf != -1)
 				break;
 		}
@@ -311,8 +311,8 @@ int associate_bpf(char * ifname) {
 
 	/* binding with real interface (wm1) */
 	struct ifreq iface;
-	strncpy(iface.ifr_name, ifname, sizeof(ifname));
-	if (ioctl(bpf, BIOCSETIF, &iface) > 0) {
+	strncpy(iface.ifr_name, ifname, sizeof(iface.ifr_name));
+	if (ioctl(bpf, BIOCSETIF, &iface) < 0) {
 		FATAL("Could not bind %s to BPF\n", ifname);
 	}
 	printf("Associated with \"%s\"\n", ifname);
@@ -353,6 +353,12 @@ int bpf_prepare(int bpf) {
 //		FATAL("Could not enable BIOCPROMISC. %u\n", rs);
 //		perror("error");
 //	}
+
+	struct bpf_version version;
+	if (ioctl(bpf, BIOCVERSION, &version) == -1) {
+		FATAL("Could not get BPF version");
+	}
+	printf("BPF version %d.%d\n", version.bv_major, version.bv_minor);
 
 	return buffer_len;
 }
